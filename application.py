@@ -3,11 +3,18 @@ import PIL
 import numpy
 
 
-from numpy.lib.function_base import average
+from numpy import average
 
 
 from numpy import zeros
 from numpy import asarray
+
+import tensorflow.compat.v1 as tf
+tf.disable_v2_behavior()
+
+# Postpone mrcnn imports until tf behavior is set? 
+# Actually disable_v2_behavior must be called before any tensor ops.
+# It is safe to call it here.
 
 from mrcnn.config import Config
 
@@ -25,7 +32,7 @@ from mrcnn.utils import extract_bboxes
 from numpy import expand_dims
 from matplotlib import pyplot
 from matplotlib.patches import Rectangle
-from keras.backend import clear_session
+from tf_keras.backend import clear_session
 import json
 from flask import Flask, flash, request,jsonify, redirect, url_for
 from werkzeug.utils import secure_filename
@@ -33,7 +40,6 @@ from werkzeug.utils import secure_filename
 from skimage.io import imread
 from mrcnn.model import mold_image
 
-import tensorflow as tf
 import sys
 
 from PIL import Image
@@ -58,6 +64,7 @@ application=Flask(__name__)
 cors = CORS(application, resources={r"/*": {"origins": "*"}})
 
 
+
 class PredictionConfig(Config):
 	# define the name of the configuration
 	NAME = "floorPlan_cfg"
@@ -67,32 +74,50 @@ class PredictionConfig(Config):
 	GPU_COUNT = 1
 	IMAGES_PER_GPU = 1
 	
-@application.before_first_request
+
+
+# Workaround for Flask 2.3+ removal of before_first_request
+first_request_processed = False
+
 def load_model():
-	global cfg
-	global _model
-	model_folder_path = os.path.abspath("./") + "/mrcnn"
-	weights_path= os.path.join(WEIGHTS_FOLDER, WEIGHTS_FILE_NAME)
-	cfg=PredictionConfig()
-	print(cfg.IMAGE_RESIZE_MODE)
-	print('==============before loading model=========')
-	_model = MaskRCNN(mode='inference', model_dir=model_folder_path,config=cfg)
-	print('=================after loading model==============')
-	_model.load_weights(weights_path, by_name=True)
-	global _graph
-	_graph = tf.get_default_graph()
+    global cfg
+    global _model
+    model_folder_path = os.path.abspath("./") + "/mrcnn"
+    weights_path= os.path.join(WEIGHTS_FOLDER, WEIGHTS_FILE_NAME)
+    cfg=PredictionConfig()
+    print(cfg.IMAGE_RESIZE_MODE)
+    print('==============before loading model=========')
+    _model = MaskRCNN(mode='inference', model_dir=model_folder_path,config=cfg)
+    print('=================after loading model==============')
+    _model.load_weights(weights_path, by_name=True)
+    global _graph
+    _graph = tf.get_default_graph()
+
+@application.before_request
+def before_request():
+    global first_request_processed
+    if not first_request_processed:
+        first_request_processed = True
+        load_model()
+
 
 
 def myImageLoader(imageInput):
-	image =  numpy.asarray(imageInput)
-	
-	
-	h,w,c=image.shape 
-	if image.ndim != 3:
-		image = skimage.color.gray2rgb(image)
-		if image.shape[-1] == 4:
-			image = image[..., :3]
-	return image,w,h
+    # Ensure image is RGB
+    if hasattr(imageInput, 'convert'):
+        imageInput = imageInput.convert('RGB')
+    
+    image = numpy.asarray(imageInput)
+    
+    # Handle case where input was not PIL but numpy and might be RGBA
+    if image.ndim == 2:
+        import skimage.color
+        image = skimage.color.gray2rgb(image)
+    elif image.shape[-1] == 4:
+        image = image[..., :3]
+        
+    h, w = image.shape[:2]
+    return image, w, h
 
 def getClassNames(classIds):
 	result=list()
@@ -141,9 +166,15 @@ def turnSubArraysToJson(objectsArr):
 
 
 
-@application.route('/',methods=['POST'])
+@application.route('/',methods=['POST', 'GET'])
 def prediction():
+	if request.method == 'GET':
+		return "FloorPlanTo3D API is running! Use POST with an image to / to analyze."
+
 	global cfg
+	if 'image' not in request.files:
+		return jsonify({"error": "No image part in the request"}), 400
+		
 	imagefile = PIL.Image.open(request.files['image'].stream)
 	image,w,h=myImageLoader(imagefile)
 	print(h,w)
@@ -170,7 +201,7 @@ def prediction():
 		
     
 if __name__ =='__main__':
-	application.debug=True
+	application.debug=False
 	print('===========before running==========')
-	application.run()
+	application.run(port=5001, threaded=False)
 	print('===========after running==========')

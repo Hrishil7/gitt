@@ -16,19 +16,19 @@ import logging
 from collections import OrderedDict
 import multiprocessing
 import numpy as np
-import tensorflow as tf
-import keras
-import keras.backend as K
-import keras.layers as KL
-import keras.engine as KE
-import keras.models as KM
+import h5py
+import tensorflow.compat.v1 as tf
+import tf_keras as keras
+import tf_keras.backend as K
+import tf_keras.layers as KL
+import tf_keras.models as KM
 
 from mrcnn import utils
 
 # Requires TensorFlow 1.3+ and Keras 2.0.8+.
 from distutils.version import LooseVersion
-assert LooseVersion(tf.__version__) >= LooseVersion("1.3")
-assert LooseVersion(keras.__version__) >= LooseVersion('2.0.8')
+# assert LooseVersion(tf.__version__) >= LooseVersion("1.3")
+# assert LooseVersion(keras.__version__) >= LooseVersion('2.0.8')
 
 
 ############################################################
@@ -252,7 +252,7 @@ def clip_boxes_graph(boxes, window):
     return clipped
 
 
-class ProposalLayer(KE.Layer):
+class ProposalLayer(KL.Layer):
     """Receives anchor scores and selects a subset to pass as proposals
     to the second stage. Filtering is done based on anchor scores and
     non-max suppression to remove overlaps. It also applies bounding
@@ -341,7 +341,7 @@ def log2_graph(x):
     return tf.log(x) / tf.log(2.0)
 
 
-class PyramidROIAlign(KE.Layer):
+class PyramidROIAlign(KL.Layer):
     """Implements ROI Pooling on multiple levels of the feature pyramid.
 
     Params:
@@ -619,7 +619,7 @@ def detection_targets_graph(proposals, gt_class_ids, gt_boxes, gt_masks, config)
     return rois, roi_gt_class_ids, deltas, masks
 
 
-class DetectionTargetLayer(KE.Layer):
+class DetectionTargetLayer(KL.Layer):
     """Subsamples proposals and generates target box refinement, class_ids,
     and masks for each.
 
@@ -699,7 +699,7 @@ def refine_detections_graph(rois, probs, deltas, window, config):
     # Class IDs per ROI
     class_ids = tf.argmax(probs, axis=1, output_type=tf.int32)
     # Class probability of the top class of each ROI
-    indices = tf.stack([tf.range(probs.shape[0]), class_ids], axis=1)
+    indices = tf.stack([tf.range(tf.shape(probs)[0]), class_ids], axis=1)
     class_scores = tf.gather_nd(probs, indices)
     # Class-specific bounding box deltas
     deltas_specific = tf.gather_nd(deltas, indices)
@@ -779,7 +779,7 @@ def refine_detections_graph(rois, probs, deltas, window, config):
     return detections
 
 
-class DetectionLayer(KE.Layer):
+class DetectionLayer(KL.Layer):
     """Takes classified proposal boxes and their bounding box deltas and
     returns the final detection boxes.
 
@@ -948,7 +948,7 @@ def fpn_classifier_graph(rois, feature_maps, image_meta,
                            name='mrcnn_bbox_fc')(shared)
     # Reshape to [batch, num_rois, NUM_CLASSES, (dy, dx, log(dh), log(dw))]
     s = K.int_shape(x)
-    mrcnn_bbox = KL.Reshape((s[1], num_classes, 4), name="mrcnn_bbox")(x)
+    mrcnn_bbox = KL.Reshape((-1, num_classes, 4), name="mrcnn_bbox")(x)
 
     return mrcnn_class_logits, mrcnn_probs, mrcnn_bbox
 
@@ -2098,27 +2098,27 @@ class MaskRCNN():
         some layers from loading.
         exclude: list of layer names to exclude
         """
-        import h5py
-        # Conditional import to support versions of Keras before 2.2
-        # TODO: remove in about 6 months (end of 2018)
-        try:
-            from keras.engine import saving
-        except ImportError:
-            # Keras before 2.2 used the 'topology' namespace.
-            from keras.engine import topology as saving
-
         if exclude:
+            import re
             by_name = True
 
         if h5py is None:
             raise ImportError('`load_weights` requires h5py.')
-        f = h5py.File(filepath, mode='r')
-        if 'layer_names' not in f.attrs and 'model_weights' in f:
-            f = f['model_weights']
+        
+        # Use simple load_weights if no exclude
+        if not exclude:
+             self.keras_model.load_weights(filepath, by_name=by_name)
+             return
 
-        # In multi-GPU training, we wrap the model. Get layers
-        # of the inner model because they have the weights.
-        keras_model = self.keras_model
+        # If exclude, we need manual loading. 
+        # For now, just raise error if exclude is used because we don't have access to legacy saving utils easily
+        # or implement a basic version.
+        # But application.py doesn't use exclude.
+        raise NotImplementedError("Exclude not supported in this ported version yet.")
+
+        # Original code below commented out
+        # ...
+
         layers = keras_model.inner_model.layers if hasattr(keras_model, "inner_model")\
             else keras_model.layers
 
