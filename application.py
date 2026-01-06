@@ -169,7 +169,8 @@ def turnSubArraysToJson(objectsArr):
 @application.route('/',methods=['POST', 'GET'])
 def prediction():
 	if request.method == 'GET':
-		return "FloorPlanTo3D API is running! Use POST with an image to / to analyze."
+		from flask import send_from_directory
+		return send_from_directory('static', 'index.html')
 
 	global cfg
 	if 'image' not in request.files:
